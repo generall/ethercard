@@ -6,6 +6,9 @@
 
 #include "EtherCard.h"
 
+#include <cctype>
+#include <cstdlib>
+
 void EtherCard::copyIp (uint8_t *dst, const uint8_t *src) {
     memcpy(dst, src, 4);
 }
@@ -14,6 +17,36 @@ void EtherCard::copyMac (uint8_t *dst, const uint8_t *src) {
     memcpy(dst, src, 6);
 }
 
+
+static void reverse(char s[])
+{
+ int i, j;
+ char c;
+
+ for (i = 0, j = strlen(s)-1; i<j; i++, j--) {
+     c = s[i];
+     s[i] = s[j];
+     s[j] = c;
+ }
+}
+
+ static void itoa(int n, char s[], int base)
+ {
+    int i, sign;
+    
+    if ((sign = n) < 0)  /* записываем знак */
+        n = -n;          /* делаем n положительным числом */
+    i = 0;
+    do {       /* генерируем цифры в обратном порядке */
+        s[i++] = n % base + '0';   /* берем следующую цифру */
+    } while ((n /= base) > 0);     /* удаляем */
+    if (sign < 0)
+        s[i++] = '-';
+    s[i] = '\0';
+    reverse(s);
+ }
+
+/*
 void EtherCard::printIp (const char* msg, const uint8_t *buf) {
     Serial.print(msg);
     EtherCard::printIp(buf);
@@ -33,6 +66,7 @@ void EtherCard::printIp (const uint8_t *buf) {
             Serial.print('.');
     }
 }
+*/
 
 // search for a string of the form key=value in
 // a string that looks like q?xyz=abc&uvw=defgh HTTP/1.1\r\n

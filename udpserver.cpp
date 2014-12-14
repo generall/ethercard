@@ -7,21 +7,24 @@
 
 #include "EtherCard.h"
 #include "net.h"
+#include "rprintf.h"
 
 #define gPB ether.buffer
+
+#define DEBUG
 
 #define UDPSERVER_MAXLISTENERS 8    //the maximum number of port listeners.
 
 typedef struct {
     UdpServerCallback callback;
-    uint16_t port;
+    uint32_t port;
     bool listening;
-} UdpServerListener;
+} __attribute__((packed)) UdpServerListener;
 
 UdpServerListener listeners[UDPSERVER_MAXLISTENERS];
 byte numListeners = 0;
 
-void EtherCard::udpServerListenOnPort(UdpServerCallback callback, uint16_t port) {
+void EtherCard::udpServerListenOnPort(UdpServerCallback callback, uint32_t port) {
     if(numListeners < UDPSERVER_MAXLISTENERS)
     {
         listeners[numListeners] = (UdpServerListener){callback, port, true};
@@ -29,7 +32,7 @@ void EtherCard::udpServerListenOnPort(UdpServerCallback callback, uint16_t port)
     }
 }
 
-void EtherCard::udpServerPauseListenOnPort(uint16_t port) {
+void EtherCard::udpServerPauseListenOnPort(uint32_t port) {
     for(int i = 0; i < numListeners; i++)
     {
         if(gPB[UDP_DST_PORT_H_P] == (listeners[i].port >> 8) && gPB[UDP_DST_PORT_L_P] == ((byte) listeners[i].port)) {
@@ -38,7 +41,7 @@ void EtherCard::udpServerPauseListenOnPort(uint16_t port) {
     }
 }
 
-void EtherCard::udpServerResumeListenOnPort(uint16_t port) {
+void EtherCard::udpServerResumeListenOnPort(uint32_t port) {
     for(int i = 0; i < numListeners; i++)
     {
         if(gPB[UDP_DST_PORT_H_P] == (listeners[i].port >> 8) && gPB[UDP_DST_PORT_L_P] == ((byte) listeners[i].port)) {
@@ -51,13 +54,17 @@ bool EtherCard::udpServerListening() {
     return numListeners > 0;
 }
 
-bool EtherCard::udpServerHasProcessedPacket(uint16_t plen) {
+bool EtherCard::udpServerHasProcessedPacket(uint32_t plen) {
     bool packetProcessed = false;
     for(int i = 0; i < numListeners; i++)
     {
+        #ifdef DEBUG
+        rprintf("Dist port: %d\n", gPB[UDP_DST_PORT_H_P]);
+        #endif
+
         if(gPB[UDP_DST_PORT_H_P] == (listeners[i].port >> 8) && gPB[UDP_DST_PORT_L_P] == ((byte) listeners[i].port) && listeners[i].listening)
         {
-            uint16_t datalen = (uint16_t) (gPB[UDP_LEN_H_P] << 8)  + gPB[UDP_LEN_L_P] - UDP_HEADER_LEN;
+            uint32_t datalen = (uint32_t) (gPB[UDP_LEN_H_P] << 8)  + gPB[UDP_LEN_L_P] - UDP_HEADER_LEN;
             listeners[i].callback(
                 listeners[i].port,
                 gPB + IP_SRC_P,

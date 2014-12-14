@@ -16,6 +16,8 @@
 
 #include "EtherCard.h"
 #include "net.h"
+#include "rtt.h"
+#include "rprintf.h"
 
 #define gPB ether.buffer
 
@@ -84,7 +86,7 @@ typedef struct {
     byte ciaddr[4], yiaddr[4], siaddr[4], giaddr[4];
     byte chaddr[16], sname[64], file[128];
     // options
-} DHCPdata;
+}  __attribute__((packed)) DHCPdata;
 
 #define DHCP_SRC_PORT 67
 #define DHCP_DEST_PORT 68
@@ -95,7 +97,7 @@ typedef struct {
 #define DHCP_HOSTNAME_MAX_LEN 32
 
 static byte dhcpState = DHCP_STATE_INIT;
-static char hostname[DHCP_HOSTNAME_MAX_LEN] = "Arduino-00";
+static char hostname[DHCP_HOSTNAME_MAX_LEN] = "AT91-00";
 static uint32_t currentXid;
 static uint32_t stateTimer;
 static uint32_t leaseStart;
@@ -115,6 +117,7 @@ static void addBytes (byte len, const byte* data) {
     while (len-- > 0)
         addToBuf(*data++);
 }
+
 
 
 // Main DHCP sending function
@@ -147,6 +150,7 @@ static void addBytes (byte len, const byte* data) {
 
 static void send_dhcp_message (void) {
 
+    uint32_t t = 0;
     uint8_t allOnes[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
     memset(gPB, 0, UDP_DATA_P + sizeof( DHCPdata ));
@@ -163,7 +167,9 @@ static void send_dhcp_message (void) {
     dhcpPtr->op = DHCP_BOOTREQUEST;
     dhcpPtr->htype = 1;
     dhcpPtr->hlen = 6;
+    t = dhcpPtr->xid;
     dhcpPtr->xid = currentXid;
+
     if (dhcpState == DHCP_STATE_BOUND) {
         EtherCard::copyIp(dhcpPtr->ciaddr, EtherCard::myip);
     }
@@ -216,7 +222,7 @@ static void send_dhcp_message (void) {
     EtherCard::udpTransmit((bufPtr - gPB) - UDP_DATA_P);
 }
 
-static void process_dhcp_offer (uint16_t len) {
+static void process_dhcp_offer (uint32_t len) {
     // Map struct onto payload
     DHCPdata *dhcpPtr = (DHCPdata*) (gPB + UDP_DATA_P);
     // Offered IP address is in yiaddr
@@ -255,7 +261,7 @@ static void process_dhcp_offer (uint16_t len) {
     } while (!done && ptr < gPB + len);
 }
 
-static bool dhcp_received_message_type (uint16_t len, byte msgType) {
+static bool dhcp_received_message_type (uint32_t len, byte msgType) {
     // Map struct onto payload
     DHCPdata *dhcpPtr = (DHCPdata*) (gPB + UDP_DATA_P);
 
@@ -288,7 +294,9 @@ bool EtherCard::dhcpSetup (const char *hname, bool fromRam) {
     	 strncpy(hostname, hname, DHCP_HOSTNAME_MAX_LEN);
      }
      else{
-       strncpy_P(hostname, hname, DHCP_HOSTNAME_MAX_LEN);
+       return false;
+       //throw "deprecated"
+       //strncpy_P(hostname, hname, DHCP_HOSTNAME_MAX_LEN);
      }
    }
    else{
@@ -298,14 +306,25 @@ bool EtherCard::dhcpSetup (const char *hname, bool fromRam) {
    }
 
 	 dhcpState = DHCP_STATE_INIT;
-	 uint16_t start = millis();	
+	 uint32_t start = millis();	
 
-   while (dhcpState != DHCP_STATE_BOUND && (uint16_t) (millis() - start) < 60000) {
-       if (isLinkUp()) DhcpStateMachine(packetReceive());
-   }
-   updateBroadcastAddress();
-   delaycnt = 0;
-   return dhcpState == DHCP_STATE_BOUND ;
+    while (dhcpState != DHCP_STATE_BOUND && (uint32_t) (millis() - start) < 60000) {
+        if (isLinkUp())
+        {
+#ifdef DHCPDEBUG
+            rprintf("isLinkUp\n");
+#endif
+            DhcpStateMachine(packetReceive());
+        }else{
+#ifdef DHCPDEBUG
+            rprintf("isLinkDown\n");
+#endif
+        }
+        
+    }
+    updateBroadcastAddress();
+    delaycnt = 0;
+    return dhcpState == DHCP_STATE_BOUND ;
 }
 
 void EtherCard::dhcpAddOptionCallback(uint8_t option, DhcpOptionCallback callback)
@@ -314,25 +333,25 @@ void EtherCard::dhcpAddOptionCallback(uint8_t option, DhcpOptionCallback callbac
     dhcpCustomOptionCallback = callback;
 }
 
-void EtherCard::DhcpStateMachine (uint16_t len) {
+void EtherCard::DhcpStateMachine (uint32_t len) {
 
 #ifdef DHCPDEBUG
     if (dhcpState != DHCP_STATE_BOUND) {
-        Serial.print(millis());
-        Serial.print(" State: ");
+        rprintf("%d", millis());
+        rprintf(" State: ");
     }
     switch (dhcpState) {
     case DHCP_STATE_INIT:
-        Serial.println("Init");
+        rprintf("Init\n");
         break;
     case DHCP_STATE_SELECTING:
-        Serial.println("Selecting");
+        rprintf("Selecting\n");
         break;
     case DHCP_STATE_REQUESTING:
-        Serial.println("Requesting");
+        rprintf("Requesting\n");
         break;
     case DHCP_STATE_RENEWING:
-        Serial.println("Renew");
+        rprintf("Renew\n");
         break;
     }
 #endif

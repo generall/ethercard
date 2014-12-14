@@ -3,11 +3,20 @@
 // Copyright: GPL V2
 //
 // 2010-05-20 <jc@wippler.nl>
+#include <stdint.h>
 
 #include "EtherCard.h"
 #include "net.h"
+#include "rtt.h"
+#include "rprintf.h"
 
 #define gPB ether.buffer
+#define DNSDEBUG
+
+//okay?
+typedef uint32_t word; 
+
+// TODO: REWRITE
 
 static byte dnstid_l; // a counter for transaction ID
 #define DNSCLIENT_SRC_PORT_H 0xE0
@@ -24,7 +33,7 @@ static void dnsRequest (const char *hostname, bool fromRam) {
     do {
         byte n = 0;
         for(;;) {
-            c = fromRam ? *hostname : pgm_read_byte(hostname);
+            c = fromRam ;//? *hostname : pgm_read_byte(hostname);
             ++hostname;
             if (c == '.' || c == 0)
                 break;
@@ -86,7 +95,7 @@ static bool checkForDnsAnswer (uint16_t plen) {
 
 // use during setup, as this discards all incoming requests until it returns
 bool EtherCard::dnsLookup (const char* name, bool fromRam) {
-    word start = millis();
+    uint32_t start = millis();
 
     while(!isLinkUp())
     {
@@ -96,21 +105,39 @@ bool EtherCard::dnsLookup (const char* name, bool fromRam) {
     while(clientWaitingGw())
     {
         packetLoop(packetReceive());
-        if ((word) (millis() - start) >= 30000)
+        if ((word) (millis() - start) >= 300000)
+        {
+            #ifdef DNSDEBUG
+            rprintf("clientWaitingGw timeout\n");
+            #endif
             return false; //timeout waiting for gateway ARP
+        }
     }
+    #ifdef DNSDEBUG
+    rprintf("Starting dnsRequest\n");
+    #endif
 
     memset(hisip, 0, 4);
     dnsRequest(name, fromRam);
 
     start = millis();
     while (hisip[0] == 0) {
-        if ((word) (millis() - start) >= 30000)
+        if ( (millis() - start) >= 300000)
+        {
+            #ifdef DNSDEBUG
+            rprintf("checkForDnsAnswer timeout\n");
+            #endif
             return false; //timout waiting for dns response
+        }
         word len = packetReceive();
         if (len > 0 && packetLoop(len) == 0) //packet not handled by tcp/ip packet loop
             if(checkForDnsAnswer(len))
+            {
+                #ifdef DNSDEBUG
+                rprintf("DNS response recieved with error\n");
+                #endif
                 return false; //DNS response recieved with error
+            }
     }
 
     return true;

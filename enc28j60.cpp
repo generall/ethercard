@@ -8,12 +8,57 @@
 //
 // 2010-05-20 <jc@wippler.nl>
 
-#if ARDUINO >= 100
-#include <Arduino.h> // Arduino 1.0
-#else
-#include <Wprogram.h> // Arduino 0022
-#endif
+#include <stdint.h>
+typedef unsigned char byte;
 #include "enc28j60.h"
+#include "project.h"
+#include "rtt.h"
+#include "rprintf.h"
+
+
+#define DEBUG 
+
+/* here: use NCPS0 @ PA11: */
+#define NCPS_PDR_BIT     AT91C_PA11_NPCS0
+#define NCPS_ASR_BIT     AT91C_PA11_NPCS0
+#define NPCS_BSR_BIT     0
+#define SPI_CSR_NUM      0          
+
+#define SPI_SCBR_MIN     2
+
+
+/* PCS_0 for NPCS0, PCS_1 for NPCS1 ... */
+#define PCS_0 ((0<<0)|(1<<1)|(1<<2)|(1<<3))
+#define PCS_1 ((1<<1)|(0<<1)|(1<<2)|(1<<3))
+#define PCS_2 ((1<<1)|(1<<1)|(0<<2)|(1<<3))
+#define PCS_3 ((1<<1)|(1<<1)|(1<<2)|(0<<3))
+/* TODO: ## */
+#if (SPI_CSR_NUM == 0)
+#define SPI_MR_PCS       PCS_0
+#elif (SPI_CSR_NUM == 1)
+#define SPI_MR_PCS       PCS_1
+#elif (SPI_CSR_NUM == 2)
+#define SPI_MR_PCS       PCS_2
+#elif (SPI_CSR_NUM == 3)
+#define SPI_MR_PCS       PCS_3
+#else
+#error "SPI_CSR_NUM invalid"
+// not realy - when using an external address decoder...
+// but this code takes over the complete SPI-interace anyway
+#endif
+
+
+typedef unsigned char   BYTE;
+typedef unsigned short  WORD;
+typedef unsigned long   DWORD;
+
+#define byte BYTE 
+
+typedef unsigned char   BOOL;
+#define FALSE   0
+#define TRUE    1
+
+#define _INTEGER
 
 uint16_t ENC28J60::bufferSize;
 bool ENC28J60::broadcast_enabled = false;
@@ -250,48 +295,122 @@ bool ENC28J60::broadcast_enabled = false;
 
 #define FULL_SPEED  1   // switch to full-speed SPI for bulk transfers
 
+
+
 static byte Enc28j60Bank;
 static int gNextPacketPtr;
-static byte selectPin;
+//static byte selectPin;
 
-void ENC28J60::initSPI () {
-    pinMode(SS, OUTPUT);
-    digitalWrite(SS, HIGH);
-    pinMode(MOSI, OUTPUT);
-    pinMode(SCK, OUTPUT);
-    pinMode(MISO, INPUT);
 
-    digitalWrite(MOSI, HIGH);
-    digitalWrite(MOSI, LOW);
-    digitalWrite(SCK, LOW);
+#define STD_DELAY 10
 
-    SPCR = bit(SPE) | bit(MSTR); // 8 MHz @ 16
-    bitSet(SPSR, SPI2X);
+void ENC28J60::initSPI()
+{
+    AT91F_PIO_CfgOutput (AT91C_BASE_PIOA, AT91C_PIO_PA14);
+    AT91F_PIO_CfgOutput (AT91C_BASE_PIOA, AT91C_PIO_PA13);
+    AT91F_PIO_CfgInput  (AT91C_BASE_PIOA, AT91C_PIO_PA12);
+    AT91F_PIO_CfgOutput (AT91C_BASE_PIOA, AT91C_PIO_PA10);
+
+}
+
+
+void SETMOSI()
+{
+  AT91F_PIO_SetOutput(AT91C_BASE_PIOA, AT91C_PIO_PA13);
+}
+
+
+void CLRMOSI()
+{
+  AT91F_PIO_ClearOutput(AT91C_BASE_PIOA, AT91C_PIO_PA13);
+}
+
+void SETCLK()
+{
+  AT91F_PIO_SetOutput(AT91C_BASE_PIOA, AT91C_PIO_PA14);
+}
+
+void CLRCLK()
+{
+  AT91F_PIO_ClearOutput(AT91C_BASE_PIOA, AT91C_PIO_PA14);
+}
+
+unsigned char READMISO()
+{
+ volatile AT91PS_PIO pPIO = AT91C_BASE_PIOA;
+ return ((pPIO->PIO_PDSR & AT91C_PIO_PA12) > 0) ? 1 : 0;
+}
+
+void SPIDELAY(int d)
+{
+  delay(d);
+}
+
+
+unsigned char xferSPI(unsigned char byte)
+{       
+    unsigned char bit;
+    
+    int SPISPEED = STD_DELAY;
+
+    for (bit = 0; bit < 8; bit++) {
+        // записать MOSI по спаду предыдущего тактового импульса 
+        if (byte & 0x80)
+            SETMOSI();
+        else
+            CLRMOSI();
+        byte <<= 1;
+ 
+        // ждём половину тактового периода перед тем как сгенерировать фронт 
+        SPIDELAY(SPISPEED/2);
+        SETCLK();
+ 
+        // ждём половину тактового периода перед тем как сгенерировать спад 
+        SPIDELAY(SPISPEED/2);
+ 
+        // читаем MISO на спаде 
+        byte |= READMISO();
+        CLRCLK();
+    }
+ 
+    return byte;
+}
+
+
+
+
+void select()
+{
+  AT91F_PIO_ClearOutput(AT91C_BASE_PIOA, AT91C_PIO_PA10);
+}
+
+void unselect()
+{
+  AT91F_PIO_SetOutput(AT91C_BASE_PIOA, AT91C_PIO_PA10);
 }
 
 static void enableChip () {
-    cli();
-    digitalWrite(selectPin, LOW);
+    AT91PS_SPI pSPI = AT91C_BASE_SPI;
+    AT91F_SPI_DisableIt(pSPI, true);
+    select();
 }
 
 static void disableChip () {
-    digitalWrite(selectPin, HIGH);
-    sei();
+    unselect();
+    AT91PS_SPI pSPI = AT91C_BASE_SPI;
+    AT91F_SPI_EnableIt(pSPI, true);
 }
 
-static void xferSPI (byte data) {
-    SPDR = data;
-    while (!(SPSR&(1<<SPIF)))
-        ;
-}
+
 
 static byte readOp (byte op, byte address) {
     enableChip();
     xferSPI(op | (address & ADDR_MASK));
-    xferSPI(0x00);
+    byte t = 0;
+    t = xferSPI(0);
     if (address & 0x80)
-        xferSPI(0x00);
-    byte result = SPDR;
+        t = xferSPI(0);
+    byte result = t;
     disableChip();
     return result;
 }
@@ -305,10 +424,10 @@ static void writeOp (byte op, byte address, byte data) {
 
 static void readBuf(uint16_t len, byte* data) {
     enableChip();
-    xferSPI(ENC28J60_READ_BUF_MEM);
+    byte t = xferSPI(ENC28J60_READ_BUF_MEM);
     while (len--) {
-        xferSPI(0x00);
-        *data++ = SPDR;
+        t = xferSPI(0x00);
+        *data++ = t;
     }
     disableChip();
 }
@@ -360,32 +479,66 @@ static uint16_t readPhyByte (byte address) {
 static void writePhy (byte address, uint16_t data) {
     writeRegByte(MIREGADR, address);
     writeReg(MIWR, data);
-    while (readRegByte(MISTAT) & MISTAT_BUSY)
-        ;
+    delay(1000);
+    byte t = 0;
+    while ((t = readRegByte(MISTAT)) & MISTAT_BUSY){
+        #ifdef DEBUG
+        rprintf("T: %d\n", t);
+        #endif
+
+        //uart0_puts("MISTAT_BUSY\n");
+        delay(10000);
+    }
 }
 
 byte ENC28J60::initialize (uint16_t size, const byte* macaddr, byte csPin) {
+
+  
     bufferSize = size;
-    if (bitRead(SPCR, SPE) == 0)
+
+    AT91PS_SPI pSPI = AT91C_BASE_SPI;
+    if ((pSPI->SPI_MR & AT91C_SPI_SPIENS) == 0)
         initSPI();
-    selectPin = csPin;
-    pinMode(selectPin, OUTPUT);
+
+    // selectPin = csPin;
+    // pinMode(selectPin, OUTPUT);
     disableChip();
 
     writeOp(ENC28J60_SOFT_RESET, 0, ENC28J60_SOFT_RESET);
+
     delay(2); // errata B7/2
     while (!readOp(ENC28J60_READ_CTRL_REG, ESTAT) & ESTAT_CLKRDY)
         ;
+    #ifdef DEBUG
+    rprintf("start config\n");
+    #endif
 
     gNextPacketPtr = RXSTART_INIT;
     writeReg(ERXST, RXSTART_INIT);
+
     writeReg(ERXRDPT, RXSTART_INIT);
     writeReg(ERXND, RXSTOP_INIT);
     writeReg(ETXST, TXSTART_INIT);
+
+
+    #ifdef DEBUG
+    if(readReg(ETXST) != TXSTART_INIT)
+    {
+        rprintf("ETXST: %d\n", readReg(ETXST));
+        rprintf("fail ETXST write\n");
+    }
+    #endif
+
     writeReg(ETXND, TXSTOP_INIT);
     enableBroadcast(); // change to add ERXFCON_BCEN recommended by epam
     writeReg(EPMM0, 0x303f);
     writeReg(EPMCS, 0xf7f9);
+
+    #ifdef DEBUG
+    if(readReg(EPMCS) != 0xf7f9)
+        rprintf("fail EPMCS write\n");    
+    #endif
+
     writeRegByte(MACON1, MACON1_MARXEN|MACON1_TXPAUS|MACON1_RXPAUS);
     writeRegByte(MACON2, 0x00);
     writeOp(ENC28J60_BIT_FIELD_SET, MACON3,
@@ -399,12 +552,25 @@ byte ENC28J60::initialize (uint16_t size, const byte* macaddr, byte csPin) {
     writeRegByte(MAADR2, macaddr[3]);
     writeRegByte(MAADR1, macaddr[4]);
     writeRegByte(MAADR0, macaddr[5]);
+    
+    #ifdef DEBUG
+    if(readRegByte(MAADR5) != macaddr[0])
+        rprintf("fail MAC write\n");    
+    #endif
+
     writePhy(PHCON2, PHCON2_HDLDIS);
+    writePhy(PHLCON, 0b0011010001110010); // LEDB to recieve and transmit activity
+
     SetBank(ECON1);
     writeOp(ENC28J60_BIT_FIELD_SET, EIE, EIE_INTIE|EIE_PKTIE);
     writeOp(ENC28J60_BIT_FIELD_SET, ECON1, ECON1_RXEN);
 
+
     byte rev = readRegByte(EREVID);
+
+    #ifdef DEBUG
+    rprintf("end config\n");
+    #endif
     // microchip forgot to step the number on the silcon when they
     // released the revision B7. 6 is now rev B7. We still have
     // to see what they do when they release B8. At the moment
@@ -418,12 +584,13 @@ bool ENC28J60::isLinkUp() {
 }
 
 void ENC28J60::packetSend(uint16_t len) {
-    // see http://forum.mysensors.org/topic/536/
-    // while (readOp(ENC28J60_READ_CTRL_REG, ECON1) & ECON1_TXRTS)
+    while (readOp(ENC28J60_READ_CTRL_REG, ECON1) & ECON1_TXRTS)
         if (readRegByte(EIR) & EIR_TXERIF) {
+            #ifdef DEBUG
+            rprintf("error interrupt flag\n");
+            #endif
             writeOp(ENC28J60_BIT_FIELD_SET, ECON1, ECON1_TXRST);
             writeOp(ENC28J60_BIT_FIELD_CLR, ECON1, ECON1_TXRST);
-            writeOp(ENC28J60_BIT_FIELD_CLR, EIR, EIR_TXERIF);
         }
     writeReg(EWRPT, TXSTART_INIT);
     writeReg(ETXND, TXSTART_INIT+len);
@@ -533,10 +700,11 @@ uint8_t ENC28J60::doBIST ( byte csPin) {
 #define RANDOM_RACE        0b1100
 
 // init
-    if (bitRead(SPCR, SPE) == 0)
+    AT91PS_SPI pSPI = AT91C_BASE_SPI;
+    if ((pSPI->SPI_MR & AT91C_SPI_SPIENS) == 0)
         initSPI();
-    selectPin = csPin;
-    pinMode(selectPin, OUTPUT);
+    //selectPin = csPin;
+    //pinMode(selectPin, OUTPUT);
     disableChip();
 
     writeOp(ENC28J60_SOFT_RESET, 0, ENC28J60_SOFT_RESET);

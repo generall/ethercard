@@ -10,13 +10,71 @@
 // 2010-05-19 <jc@wippler.nl>
 
 #include <EtherCard.h>
-#include <stdarg.h>
-#include <avr/eeprom.h>
+#include <cstdarg>
+#include <stdlib.h>
 
 //#define FLOATEMIT // uncomment line to enable $T in emit_P for float emitting
 
+#if !defined(PROGMEM)
+#define PROGMEM
+
+#define pgm_read_word(data) *(data)
+#define pgm_read_byte(data) *(data)
+#define eeprom_read_byte(data) *(data)
+
+#define memcpy_P(dest, src, len) memcpy((dest), (src), (len))
+#define strlen_P(data) strlen(data)
+
+#endif
+
+static void reverse(char s[])
+{
+ int i, j;
+ char c;
+
+ for (i = 0, j = strlen(s)-1; i<j; i++, j--) {
+     c = s[i];
+     s[i] = s[j];
+     s[j] = c;
+ }
+}
+
+ static void itoa(int n, char s[], int base)
+ {
+    int i, sign;
+    
+    if ((sign = n) < 0)  /* записываем знак */
+        n = -n;          /* делаем n положительным числом */
+    i = 0;
+    do {       /* генерируем цифры в обратном порядке */
+        s[i++] = n % base + '0';   /* берем следующую цифру */
+    } while ((n /= base) > 0);     /* удаляем */
+    if (sign < 0)
+        s[i++] = '-';
+    s[i] = '\0';
+    reverse(s);
+ }
+
+
 byte Stash::map[256/8];
 Stash::Block Stash::bufs[2];
+
+static byte bitRead(byte data, int i)
+{
+    return (data & (1 << i)) > 0;
+}
+
+
+static void bitClear(byte &data, int i)
+{
+    data = (data & ~(1 << i));
+}
+
+
+static void bitSet(byte &data, int i)
+{
+    data = (data | (1 << i));
+}
 
 uint8_t Stash::allocBlock () {
     for (uint8_t i = 0; i < sizeof map; ++i)
@@ -128,11 +186,11 @@ char Stash::get () {
     return b;
 }
 
-uint16_t Stash::size () {
+uint32_t Stash::size () {
     return 63 * count + fetchByte(last, 62) - sizeof (StashHeader);
 }
 
-static char* wtoa (uint16_t value, char* ptr) {
+static char* wtoa (uint32_t value, char* ptr) {
     if (value > 9)
         ptr = wtoa(value / 10, ptr);
     *ptr = '0' + value % 10;
@@ -140,16 +198,12 @@ static char* wtoa (uint16_t value, char* ptr) {
     return ptr;
 }
 
+
 void Stash::prepare (PGM_P fmt, ...) {
     Stash::load(0, 0);
-    uint16_t* segs = Stash::bufs[0].words;
+    uint32_t* segs = Stash::bufs[0].words;
     *segs++ = strlen_P(fmt);
-#ifdef __AVR__
-    *segs++ = (uint16_t) fmt;
-#else
     *segs++ = (uint32_t) fmt;
-    *segs++ = (uint32_t) fmt >> 16;
-#endif
     va_list ap;
     va_start(ap, fmt);
     for (;;) {
@@ -157,11 +211,7 @@ void Stash::prepare (PGM_P fmt, ...) {
         if (c == 0)
             break;
         if (c == '$') {
-#ifdef __AVR__
-            uint16_t argval = va_arg(ap, uint16_t), arglen = 0;
-#else
-            uint32_t argval = va_arg(ap, int), arglen = 0;
-#endif
+            uint32_t argval = va_arg(ap, uint32_t), arglen = 0;
             switch (pgm_read_byte(fmt++)) {
             case 'D': {
                 char buf[7];
@@ -188,35 +238,25 @@ void Stash::prepare (PGM_P fmt, ...) {
                 break;
             }
             }
-#ifdef __AVR__
             *segs++ = argval;
-#else
-            *segs++ = argval; 
-            *segs++ = argval >> 16;
-#endif
             Stash::bufs[0].words[0] += arglen - 2;
         }
     }
     va_end(ap);
 }
 
-uint16_t Stash::length () {
+uint32_t Stash::length () {
     Stash::load(0, 0);
     return Stash::bufs[0].words[0];
 }
 
-void Stash::extract (uint16_t offset, uint16_t count, void* buf) {
+void Stash::extract (uint32_t offset, uint32_t count, void* buf) {
     Stash::load(0, 0);
-    uint16_t* segs = Stash::bufs[0].words;
-#ifdef __AVR__
+    uint32_t* segs = Stash::bufs[0].words;
     PGM_P fmt = (PGM_P) *++segs;
-#else
-    PGM_P fmt = (PGM_P)((segs[2] << 16) | segs[1]);
-    segs += 2;
-#endif
     Stash stash;
     char mode = '@', tmp[7], *ptr = NULL, *out = (char*) buf;
-    for (uint16_t i = 0; i < offset + count; ) {
+    for (uint32_t i = 0; i < offset + count; ) {
         char c = 0;
         switch (mode) {
         case '@': {
@@ -225,12 +265,7 @@ void Stash::extract (uint16_t offset, uint16_t count, void* buf) {
                 return;
             if (c != '$')
                 break;
-#ifdef __AVR__
-            uint16_t arg = *++segs;
-#else
             uint32_t arg = *++segs;
-            arg |= *++segs << 16;
-#endif
             mode = pgm_read_byte(fmt++);
             switch (mode) {
             case 'D':
@@ -275,24 +310,14 @@ void Stash::extract (uint16_t offset, uint16_t count, void* buf) {
 
 void Stash::cleanup () {
     Stash::load(0, 0);
-    uint16_t* segs = Stash::bufs[0].words;
-#ifdef __AVR__
+    uint32_t* segs = Stash::bufs[0].words;
     PGM_P fmt = (PGM_P) *++segs;
-#else
-    PGM_P fmt = (PGM_P)((segs[2] << 16) | segs[1]);
-    segs += 2;
-#endif
     for (;;) {
         char c = pgm_read_byte(fmt++);
         if (c == 0)
             break;
         if (c == '$') {
-#ifdef __AVR__
-            uint16_t arg = *++segs;
-#else
             uint32_t arg = *++segs;
-            arg |= *++segs << 16;
-#endif
             if (pgm_read_byte(fmt++) == 'H') {
                 Stash stash (arg);
                 stash.release();
@@ -315,11 +340,7 @@ void BufferFiller::emit_p(PGM_P fmt, ...) {
         c = pgm_read_byte(fmt++);
         switch (c) {
         case 'D':
-#ifdef __AVR__
-            wtoa(va_arg(ap, uint16_t), (char*) ptr);
-#else
-            wtoa(va_arg(ap, int), (char*) ptr);
-#endif
+            wtoa(va_arg(ap, uint32_t), (char*) ptr);
             break;
 #ifdef FLOATEMIT
         case 'T':
@@ -327,11 +348,7 @@ void BufferFiller::emit_p(PGM_P fmt, ...) {
             break;
 #endif
         case 'H': {
-#ifdef __AVR__
-            char p1 =  va_arg(ap, uint16_t);
-#else
-            char p1 =  va_arg(ap, int);
-#endif
+            char p1 =  va_arg(ap, uint32_t);
             char p2;
             p2 = (p1 >> 4) & 0x0F;
             p1 = p1 & 0x0F;
@@ -344,7 +361,7 @@ void BufferFiller::emit_p(PGM_P fmt, ...) {
             continue;
         }
         case 'L':
-            ltoa(va_arg(ap, long), (char*) ptr, 10);
+            itoa(va_arg(ap, int), (char*) ptr, 10);
             break;
         case 'S':
             strcpy((char*) ptr, va_arg(ap, const char*));
@@ -382,12 +399,12 @@ uint8_t EtherCard::gwip[4];   // gateway
 uint8_t EtherCard::dhcpip[4]; // dhcp server
 uint8_t EtherCard::dnsip[4];  // dns server
 uint8_t EtherCard::hisip[4];  // ip address of remote host
-uint16_t EtherCard::hisport = 80; // tcp port to browse to
+uint32_t EtherCard::hisport = 80; // tcp port to browse to
 bool EtherCard::using_dhcp = false;
 bool EtherCard::persist_tcp_connection = false;
 int16_t EtherCard::delaycnt = 0; //request gateway ARP lookup
 
-uint8_t EtherCard::begin (const uint16_t size,
+uint8_t EtherCard::begin (const uint32_t size,
                           const uint8_t* macaddr,
                           uint8_t csPin) {
     using_dhcp = false;

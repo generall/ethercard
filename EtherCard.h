@@ -25,25 +25,27 @@
 
 
 #if ARDUINO >= 100
-#include <Arduino.h> // Arduino 1.0
 #define WRITE_RESULT size_t
 #define WRITE_RETURN return 1;
 #else
-#include <WProgram.h> // Arduino 0022
 #define WRITE_RESULT void
 #define WRITE_RETURN
 #endif
 
-#include <avr/pgmspace.h>
+#include <stdint.h>
+#include <string.h>
 #include "enc28j60.h"
 #include "net.h"
 
+typedef unsigned char byte;
+typedef const char* PGM_P;
+
 /** This type definition defines the structure of a UDP server event handler callback funtion */
 typedef void (*UdpServerCallback)(
-    uint16_t dest_port,    ///< Port the packet was sent to
+    uint32_t dest_port,    ///< Port the packet was sent to
     uint8_t src_ip[4],    ///< IP address of the sender
     const char *data,   ///< UDP payload data
-    uint16_t len);        ///< Length of the payload data
+    uint32_t len);        ///< Length of the payload data
 
 /** This type definition defines the structure of a DHCP Option callback funtion */
 typedef void (*DhcpOptionCallback)(
@@ -57,26 +59,32 @@ typedef struct {
     uint8_t count;     ///< Number of allocated pages
     uint8_t first;     ///< First allocated page
     uint8_t last;      ///< Last allocated page
-} StashHeader;
+} __attribute__((packed)) StashHeader;
+
+class Print
+{
+public:
+    void print(){}
+};
 
 /** This class provides access to the memory within the ENC28J60 network interface. */
-class Stash : public /*Stream*/ Print, private StashHeader {
+class Stash : public Print, private StashHeader {
     uint8_t curr;      //!< Current page
     uint8_t offs;      //!< Current offset in page
 
     typedef struct {
         union {
             uint8_t bytes[64];
-            uint16_t words[32];
+            uint32_t words[32];
             struct {
                 StashHeader head;
                 uint8_t filler[59];
                 uint8_t tail;
                 uint8_t next;
-            };
+            } __attribute__((packed));
         };
         uint8_t bnum;
-    } Block;
+    } __attribute__((packed)) Block;
 
     static uint8_t allocBlock ();
     static void freeBlock (uint8_t block);
@@ -100,7 +108,7 @@ public:
 
     void put (char c);
     char get ();
-    uint16_t size ();
+    uint32_t size ();
 
     virtual WRITE_RESULT write(uint8_t b) { put(b); WRITE_RETURN }
 
@@ -122,8 +130,8 @@ public:
     // }
 
     static void prepare (PGM_P fmt, ...);
-    static uint16_t length ();
-    static void extract (uint16_t offset, uint16_t count, void* buf);
+    static uint32_t length ();
+    static void extract (uint32_t offset, uint32_t count, void* buf);
     static void cleanup ();
 
     friend void dumpBlock (const char* msg, uint8_t idx); // optional
@@ -140,9 +148,9 @@ public:
 *
 *   | Format | Parameter   | Output
 *   |--------|-------------|----------
-*   | $D     | uint16_t    | Decimal representation
+*   | $D     | uint32_t    | Decimal representation
 *   | $T ¤   | double      | Decimal representation with 3 digits after decimal sign ([-]d.ddd)
-*   | $H     | uint16_t    | Hexadecimal value of lsb (from 00 to ff)
+*   | $H     | uint32_t    | Hexadecimal value of lsb (from 00 to ff)
 *   | $L     | long        | Decimal representation
 *   | $S     | const char* | Copy null terminated string from main memory
 *   | $F     | PGM_P       | Copy null terminated string from program space
@@ -153,9 +161,9 @@ public:
 *
 *   # Examples
 *   ~~~~~~~~~~~~~{.c}
-*     uint16_t ddd = 123;
+*     uint32_t ddd = 123;
 *     double ttt = 1.23;
-*     uint16_t hhh = 0xa4;
+*     uint32_t hhh = 0xa4;
 *     long lll = 123456789;
 *     char * sss;
 *     char fff[] PROGMEM = "MyMemory";
@@ -196,13 +204,7 @@ public:
     *   @param  s Pointer to data
     *   @param  n Number of characters to copy
     */
-    void emit_raw (const char* s, uint16_t n) { memcpy(ptr, s, n); ptr += n; }
-
-    /** @brief  Add data to buffer from program space string
-    *   @param  p Program space string pointer
-    *   @param  n Number of characters to copy
-    */
-    void emit_raw_p (PGM_P p, uint16_t n) { memcpy_P(ptr, p, n); ptr += n; }
+    void emit_raw (const char* s, uint32_t n) { memcpy(ptr, s, n); ptr += n; }
 
     /** @brief  Get pointer to start of buffer
     *   @return <i>uint8_t*</i> Pointer to start of buffer
@@ -210,9 +212,9 @@ public:
     uint8_t* buffer () const { return start; }
 
     /** @brief  Get cursor position
-    *   @return <i>uint16_t</i> Cursor postion
+    *   @return <i>uint32_t</i> Cursor postion
     */
-    uint16_t position () const { return ptr - start; }
+    uint32_t position () const { return ptr - start; }
 
     /** @brief  Write one byte to buffer
     *   @param  v Byte to add to buffer
@@ -233,7 +235,7 @@ public:
     static uint8_t dhcpip[4]; ///< DHCP server IP address
     static uint8_t dnsip[4];  ///< DNS server IP address
     static uint8_t hisip[4];  ///< DNS lookup result
-    static uint16_t hisport;  ///< TCP port to connect to (default 80)
+    static uint32_t hisport;  ///< TCP port to connect to (default 80)
     static bool using_dhcp;   ///< True if using DHCP
     static bool persist_tcp_connection; ///< False to break connections on first packet received
     static int16_t delaycnt; ///< Counts number of cycles of packetLoop when no packet received - used to trigger periodic gateway ARP request
@@ -245,7 +247,7 @@ public:
     *     @param  csPin Arduino pin number connected to chip select. Default = 8
     *     @return <i>uint8_t</i> Firmware version or zero on failure.
     */
-    static uint8_t begin (const uint16_t size, const uint8_t* macaddr,
+    static uint8_t begin (const uint32_t size, const uint8_t* macaddr,
                           uint8_t csPin =8);
 
     /**   @brief  Configure network interface with static IP
@@ -266,33 +268,33 @@ public:
     *     @param  len Size of data payload (max 220)
     *     @param  port Source IP port
     */
-    static void makeUdpReply (const char *data, uint8_t len, uint16_t port);
+    static void makeUdpReply (const char *data, uint8_t len, uint32_t port);
 
     /**   @brief  Parse received data
     *     @param  plen Size of data to parse (e.g. return value of packetReceive()).
-    *     @return <i>uint16_t</i> Offset of TCP payload data in data buffer or zero if packet processed
+    *     @return <i>uint32_t</i> Offset of TCP payload data in data buffer or zero if packet processed
     *     @note   Data buffer is shared by receive and transmit functions
     *     @note   Only handles ARP and IP
     */
-    static uint16_t packetLoop (uint16_t plen);
+    static uint32_t packetLoop (uint32_t plen);
 
     /**   @brief  Accept a TCP/IP connection
     *     @param  port IP port to accept on - do nothing if wrong port
     *     @param  plen Number of bytes in packet
-    *     @return <i>uint16_t</i> Offset within packet of TCP payload. Zero for no data.
+    *     @return <i>uint32_t</i> Offset within packet of TCP payload. Zero for no data.
     */
-    static uint16_t accept (uint16_t port, uint16_t plen);
+    static uint32_t accept (uint32_t port, uint32_t plen);
 
     /**   @brief  Send a response to a HTTP request
     *     @param  dlen Size of the HTTP (TCP) payload
     */
-    static void httpServerReply (uint16_t dlen);
+    static void httpServerReply (uint32_t dlen);
 
     /**   @brief  Send a response to a HTTP request
     *     @param  dlen Size of the HTTP (TCP) payload
     *     @param  flags TCP flags
     */
-    static void httpServerReply_with_flags (uint16_t dlen , uint8_t flags);
+    static void httpServerReply_with_flags (uint32_t dlen , uint8_t flags);
 
     /**   @brief  Acknowledge TCP message
     *     @todo   Is this / should this be private?
@@ -320,8 +322,8 @@ public:
     *     @return <i>unit8_t</i> ID of TCP/IP session (0-7)
     *     @note   Return value provides id of the request to allow up to 7 concurrent requests
     */
-    static uint8_t clientTcpReq (uint8_t (*result_cb)(uint8_t,uint8_t,uint16_t,uint16_t),
-                                 uint16_t (*datafill_cb)(uint8_t),uint16_t port);
+    static uint8_t clientTcpReq (uint8_t (*result_cb)(uint8_t,uint8_t,uint32_t,uint32_t),
+                                 uint32_t (*datafill_cb)(uint8_t),uint32_t port);
 
     /**   @brief  Prepare HTTP request
     *     @param  urlbuf Pointer to c-string URL folder
@@ -333,7 +335,7 @@ public:
     */
     static void browseUrl (const char *urlbuf, const char *urlbuf_varpart,
                            const char *hoststr, const char *additionalheaderline,
-                           void (*callback)(uint8_t,uint16_t,uint16_t));
+                           void (*callback)(uint8_t,uint32_t,uint32_t));
 
     /**   @brief  Prepare HTTP request
     *     @param  urlbuf Pointer to c-string URL folder
@@ -344,7 +346,7 @@ public:
     */
     static void browseUrl (const char *urlbuf, const char *urlbuf_varpart,
                            const char *hoststr,
-                           void (*callback)(uint8_t,uint16_t,uint16_t));
+                           void (*callback)(uint8_t,uint32_t,uint32_t));
 
     /**   @brief  Prepare HTTP post message
     *     @param  urlbuf Pointer to c-string URL folder
@@ -356,7 +358,7 @@ public:
     */
     static void httpPost (const char *urlbuf, const char *hoststr,
                           const char *additionalheaderline, const char *postval,
-                          void (*callback)(uint8_t,uint16_t,uint16_t));
+                          void (*callback)(uint8_t,uint32_t,uint32_t));
 
     /**   @brief  Send NTP request
     *     @param  ntpip IP address of NTP server
@@ -376,12 +378,12 @@ public:
     *     @param  dip Pointer to 4 byte destination IP address
     *     @param  dport Destination port
     */
-    static void udpPrepare (uint16_t sport, const uint8_t *dip, uint16_t dport);
+    static void udpPrepare (uint32_t sport, const uint8_t *dip, uint32_t dport);
 
     /**   @brief  Transmit UDP packet
     *     @param  len Size of payload
     */
-    static void udpTransmit (uint16_t len);
+    static void udpTransmit (uint32_t len);
 
     /**   @brief  Sends a UDP packet
     *     @param  data Pointer to data
@@ -390,8 +392,8 @@ public:
     *     @param  dip Pointer to 4 byte destination IP address
     *     @param  dport Destination port
     */
-    static void sendUdp (const char *data, uint8_t len, uint16_t sport,
-                         const uint8_t *dip, uint16_t dport);
+    static void sendUdp (const char *data, uint8_t len, uint32_t sport,
+                         const uint8_t *dip, uint32_t dport);
 
     /**   @brief  Resister the function to handle ping events
     *     @param  cb Pointer to function
@@ -434,17 +436,17 @@ public:
     *     @param  callback Function to handle event
     *     @param  port Port to listen on
     */
-    static void udpServerListenOnPort(UdpServerCallback callback, uint16_t port);
+    static void udpServerListenOnPort(UdpServerCallback callback, uint32_t port);
 
     /**   @brief  Pause listing on UDP port
     *     @brief  port Port to pause
     */
-    static void udpServerPauseListenOnPort(uint16_t port);
+    static void udpServerPauseListenOnPort(uint32_t port);
 
     /**   @brief  Resume listing on UDP port
     *     @brief  port Port to pause
     */
-    static void udpServerResumeListenOnPort(uint16_t port);
+    static void udpServerResumeListenOnPort(uint32_t port);
 
     /**   @brief  Check if UDP server is listening on any ports
     *     @return <i>bool</i> True if listening on any ports
@@ -455,13 +457,13 @@ public:
     *     @param  len Not used
     *     @return <i>bool</i> True if packet processed
     */
-    static bool udpServerHasProcessedPacket(uint16_t len);    //called by tcpip, in packetLoop
+    static bool udpServerHasProcessedPacket(uint32_t len);    //called by tcpip, in packetLoop
 
     // dhcp.cpp
     /**   @brief  Update DHCP state
     *     @param  len Length of received data packet
     */
-    static void DhcpStateMachine(uint16_t len);
+    static void DhcpStateMachine(uint32_t len);
 
     /**   @brief Not implemented
     *     @todo Implement dhcpStartTime or remove declaration
@@ -485,8 +487,8 @@ public:
     static bool dhcpSetup (const char *hname = NULL, bool fromRam =false);
 
     /**   @brief  Register a callback for a specific DHCP option number
-    *     @param  option The option number to request from the DHCP server
-    *     @param  callback The function to be call when the option is received
+    *     @param  <i>option</i> The option number to request from the DHCP server
+    *     @param  <i>callback</i> The function to be call when the option is received
     */
     static void dhcpAddOptionCallback(uint8_t option, DhcpOptionCallback callback);
 
@@ -526,14 +528,6 @@ public:
     *     @note   There is no check of source or destination size. Ensure both are 4 bytes
     */
     static void printIp (const char* msg, const uint8_t *buf);
-
-    /**   @brief  Output Flash String Helper and IP address to serial port in dotted decimal IP format
-    *     @param  ifsh Pointer to Flash String Helper
-    *     @param  buf Pointer to 4 byte IP address
-    *     @note   There is no check of source or destination size. Ensure both are 4 bytes
-    *     @todo   What is a FlashStringHelper?
-    */
-    static void printIp (const __FlashStringHelper *ifsh, const uint8_t *buf);
 
     /**   @brief  Search for a string of the form key=value in a string that looks like q?xyz=abc&uvw=defgh HTTP/1.1\\r\\n
     *     @param  str Pointer to the null terminated string to search
